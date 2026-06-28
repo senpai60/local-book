@@ -5,18 +5,22 @@ import Navbar from './Navbar';
 import ToastContainer from '../ui/Toast';
 import { useAuthStore } from '../../store/authStore';
 import { useReaderStore } from '../../store/readerStore';
+import { useLibraryStore } from '../../store/libraryStore';
 
 export const Layout: React.FC = () => {
   const { isAuthenticated } = useAuthStore();
   const { activeBookId } = useReaderStore();
+  const fetchLibrary = useLibraryStore((state) => state.fetchLibrary);
   const navigate = useNavigate();
 
   // Route guarding: check if authenticated
   useEffect(() => {
     if (!isAuthenticated) {
       navigate('/auth/login');
+    } else {
+      fetchLibrary();
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, fetchLibrary]);
 
   if (!isAuthenticated) {
     return null; // Prevents flashing content

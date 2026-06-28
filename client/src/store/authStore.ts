@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { User, UserPreferences } from '../types';
-import { MOCK_USER } from '../constants';
+import { apiClient } from '../api/client';
 
 interface AuthState {
   user: User | null;
@@ -9,78 +9,76 @@ interface AuthState {
   error: string | null;
   login: (email: string, password: string) => Promise<boolean>;
   register: (name: string, email: string, password: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  checkAuth: () => Promise<void>;
   updatePreferences: (prefs: Partial<UserPreferences>) => void;
   addStorageUsed: (bytes: number) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => {
-  // Try to load cached session
-  const cachedUser = localStorage.getItem('bv_user');
-  const user = cachedUser ? JSON.parse(cachedUser) : null;
-
   return {
-    user,
-    isAuthenticated: !!user,
+    user: null,
+    isAuthenticated: false,
     isLoading: false,
     error: null,
 
     login: async (email, password) => {
       set({ isLoading: true, error: null });
-      // Simulate API latency
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      if (email.trim() && password.length >= 6) {
-        // Authenticate using Mock User or create one if mismatch
-        const loggedUser: User = {
-          ...MOCK_USER,
-          email: email.trim(),
-          name: email.split('@')[0],
-        };
-        localStorage.setItem('bv_user', JSON.stringify(loggedUser));
-        set({ user: loggedUser, isAuthenticated: true, isLoading: false });
+      try {
+        const response = await apiClient.post('/auth/login', { email, password });
+        const user = response.data.data.user;
+        set({ user, isAuthenticated: true, isLoading: false });
         return true;
-      } else {
-        set({ error: 'Invalid credentials. Password must be at least 6 characters.', isLoading: false });
+      } catch (error: any) {
+        set({
+          error: error.response?.data?.message || 'Login failed',
+          isLoading: false,
+        });
         return false;
       }
     },
 
     register: async (name, email, password) => {
       set({ isLoading: true, error: null });
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      if (name.trim() && email.trim() && password.length >= 6) {
-        const newUser: User = {
-          id: `usr_${Math.random().toString(36).substr(2, 9)}`,
-          email: email.trim(),
-          name: name.trim(),
-          joinedAt: new Date().toISOString(),
-          storageUsed: 0,
-          storageLimit: 2 * 1024 * 1024 * 1024, // 2GB free tier
-          preferences: {
-            theme: 'dark',
-            fontSize: 'medium',
-            marginWidth: 'normal',
-            lineHeight: 'normal',
-            fontFamily: 'serif',
-          },
-        };
-        localStorage.setItem('bv_user', JSON.stringify(newUser));
-        set({ user: newUser, isAuthenticated: true, isLoading: false });
+      try {
+        const response = await apiClient.post('/auth/register', { name, email, password });
+        // After register, we should probably login, or the backend registers and returns user.
+        // auth.controller.js register returns user, but doesn't set cookies. We can just return true and let user login.
+        set({ isLoading: false });
         return true;
-      } else {
-        set({ error: 'Please enter valid details. Password must be 6+ characters.', isLoading: false });
+      } catch (error: any) {
+        set({
+          error: error.response?.data?.message || 'Registration failed',
+          isLoading: false,
+        });
         return false;
       }
     },
 
-    logout: () => {
-      localStorage.removeItem('bv_user');
-      set({ user: null, isAuthenticated: false });
+    logout: async () => {
+      try {
+        await apiClient.post('/auth/logout');
+      } catch (error) {
+        console.error('Logout error:', error);
+      } finally {
+        set({ user: null, isAuthenticated: false });
+      }
+    },
+
+    checkAuth: async () => {
+      set({ isLoading: true });
+      try {
+        const response = await apiClient.get('/auth/profile');
+        const user = response.data.data;
+        set({ user, isAuthenticated: true, isLoading: false });
+      } catch (error) {
+        set({ user: null, isAuthenticated: false, isLoading: false });
+      }
     },
 
     updatePreferences: (prefs) => {
+      // In a real app, this should make an API call to update user preferences on the backend.
+      // For now, we update local state.
       set((state) => {
         if (!state.user) return {};
         const updatedUser = {
@@ -90,7 +88,6 @@ export const useAuthStore = create<AuthState>((set) => {
             ...prefs,
           },
         };
-        localStorage.setItem('bv_user', JSON.stringify(updatedUser));
         return { user: updatedUser };
       });
     },
@@ -102,7 +99,6 @@ export const useAuthStore = create<AuthState>((set) => {
           ...state.user,
           storageUsed: Math.min(state.user.storageLimit, state.user.storageUsed + bytes),
         };
-        localStorage.setItem('bv_user', JSON.stringify(updatedUser));
         return { user: updatedUser };
       });
     },

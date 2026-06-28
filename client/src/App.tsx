@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import Login from './features/auth/Login';
@@ -11,8 +11,15 @@ import Profile from './features/profile/Profile';
 import Settings from './features/settings/Settings';
 import Reader from './features/reader/Reader';
 import NotFound from './features/NotFound';
+import { useAuthStore } from './store/authStore';
 
 export const App: React.FC = () => {
+  const checkAuth = useAuthStore((state) => state.checkAuth);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
   return (
     <BrowserRouter>
       <Routes>
