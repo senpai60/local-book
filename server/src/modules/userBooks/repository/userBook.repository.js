@@ -20,4 +20,8 @@ export class UserBookRepository {
   async updateByUserAndBook(userId, bookId, updateData) {
     return await UserBook.findOneAndUpdate({ userId, bookId }, updateData, { new: true });
   }
+
+  async removeByUserAndBook(userId, bookId) {
+    return await UserBook.findOneAndDelete({ userId, bookId });
+  }
 }

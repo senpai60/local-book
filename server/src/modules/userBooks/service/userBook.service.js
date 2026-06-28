@@ -25,4 +25,8 @@ export class UserBookService {
     }
     return await this.userBookRepository.updateByUserAndBook(userId, bookId, { isFavorite: !userBook.isFavorite });
   }
+
+  async removeFromLibrary(userId, bookId) {
+    return await this.userBookRepository.removeByUserAndBook(userId, bookId);
+  }
 }

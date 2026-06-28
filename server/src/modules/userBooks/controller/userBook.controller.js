@@ -29,3 +29,12 @@ export const toggleFavoriteStatus = asyncHandler(async (req, res) => {
   }
   return res.status(200).json(new ApiResponse(200, entry, "Favorite status toggled successfully"));
 });
+
+export const removeLibraryEntry = asyncHandler(async (req, res) => {
+  const { bookId } = req.params;
+  const entry = await userBookService.removeFromLibrary(req.user._id, bookId);
+  if (!entry) {
+    throw new ApiError(404, "Book not found in library");
+  }
+  return res.status(200).json(new ApiResponse(200, {}, "Book removed from library successfully"));
+});

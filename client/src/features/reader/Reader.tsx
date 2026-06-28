@@ -15,9 +15,14 @@ import {
 import { useLibraryStore } from '../../store/libraryStore';
 import { useReaderStore } from '../../store/readerStore';
 import { useToastStore } from '../../store/toastStore';
-import { MOCK_CHAPTERS, MOCK_BOOK_CONTENT } from '../../constants';
+import { MOCK_CHAPTERS } from '../../constants';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export const Reader: React.FC = () => {
   const { books, bookmarks, notes, updateReadingProgress, addBookmark, addNote, removeBookmark } = useLibraryStore();
@@ -46,6 +51,7 @@ export const Reader: React.FC = () => {
   const [newBookmarkLabel, setNewBookmarkLabel] = useState('');
   const [newBookmarkNote, setNewBookmarkNote] = useState('');
   const [showBookmarkForm, setShowBookmarkForm] = useState(false);
+  const [numPages, setNumPages] = useState<number | null>(null);
   
   const [noteContent, setNoteContent] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
@@ -63,14 +69,11 @@ export const Reader: React.FC = () => {
   if (!book) return null;
 
   const chapters = MOCK_CHAPTERS[book.id] || [];
-  const bookPages = MOCK_BOOK_CONTENT[book.id] || [
-    `This is a digital rendering of ${book.title}. Page content is currently emulated in high-fidelity serif layout.`,
-    `Craftsmanship represents the intersection of discipline and time. By studying design templates, we unlock secrets of the ancient layout curators.`,
-    `Silence is the canvas of intelligence. True focus requires absolute elimination of secondary UI blobs and visual gradients.`
-  ];
 
-  // Map progress bounds safely
-  const currentPageContent = bookPages[book.currentPage % bookPages.length] || bookPages[0];
+  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+    setNumPages(numPages);
+    // If book totalPages in state is wrong, we could dispatch to update it
+  };
 
   const handlePrevPage = () => {
     if (book.currentPage > 0) {
@@ -79,7 +82,8 @@ export const Reader: React.FC = () => {
   };
 
   const handleNextPage = () => {
-    if (book.currentPage < book.totalPages - 1) {
+    const total = numPages || book.totalPages || 1;
+    if (book.currentPage < total - 1) {
       updateReadingProgress(book.id, book.currentPage + 1);
     }
   };
@@ -547,22 +551,30 @@ export const Reader: React.FC = () => {
             </div>
 
             {/* Immersive animated text display */}
-            <div className="flex-grow w-full flex flex-col justify-center select-text">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={book.currentPage}
-                  initial={{ opacity: 0, y: 5, filter: 'blur(2px)' }}
-                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, y: -5, filter: 'blur(2px)' }}
-                  transition={{ duration: 0.22 }}
-                  className={`w-full select-text whitespace-pre-wrap ${fontClasses[fontFamily]} ${sizeClasses[fontSize]}`}
-                  style={{
-                    lineHeight: lineHeight === 'tight' ? 1.6 : lineHeight === 'normal' ? 2.1 : 2.5
-                  }}
-                >
-                  {currentPageContent}
-                </motion.div>
-              </AnimatePresence>
+            <div className="flex-grow w-full flex flex-col justify-center items-center select-text relative overflow-hidden">
+              <Document
+                file={{ url: `/api/v1/books/${book.id}/file`, withCredentials: true }}
+                onLoadSuccess={onDocumentLoadSuccess}
+                loading={
+                  <div className="flex items-center justify-center text-[#8D8D8D] font-mono text-xs uppercase tracking-widest h-64">
+                    Decrypting Vault Source...
+                  </div>
+                }
+                error={
+                  <div className="text-red-500 font-mono text-xs p-4">
+                    Failed to decrypt physical format.
+                  </div>
+                }
+                className="flex justify-center"
+              >
+                <Page
+                  pageNumber={book.currentPage + 1}
+                  renderTextLayer={true}
+                  renderAnnotationLayer={true}
+                  width={marginWidth === 'compact' ? 400 : marginWidth === 'wide' ? 800 : 600}
+                  className="shadow-2xl bg-white"
+                />
+              </Document>
             </div>
 
             {/* Embedded Bookmark shortcut list on page */}
@@ -582,9 +594,9 @@ export const Reader: React.FC = () => {
 
             {/* Floating Navigation Footnote bar */}
             <div className="mt-8 select-none text-[10px] font-mono tracking-widest uppercase text-[#8D8D8D] flex items-center gap-1.5 border-t border-[#1f1f1f]/20 pt-4">
-              <span>Page {book.currentPage + 1} of {book.totalPages}</span>
+              <span>Page {book.currentPage + 1} of {numPages || book.totalPages}</span>
               <span>•</span>
-              <span>{Math.round(((book.currentPage + 1) / book.totalPages) * 100)}% Complete</span>
+              <span>{Math.round(((book.currentPage + 1) / (numPages || book.totalPages)) * 100)}% Complete</span>
             </div>
 
           </div>
@@ -607,12 +619,12 @@ export const Reader: React.FC = () => {
             </button>
             
             <span className="text-[10px] font-mono uppercase tracking-widest text-[#8D8D8D]">
-              Page {book.currentPage + 1} of {book.totalPages}
+              Page {book.currentPage + 1} of {numPages || book.totalPages}
             </span>
 
             <button
               onClick={handleNextPage}
-              disabled={book.currentPage === book.totalPages - 1}
+              disabled={book.currentPage === (numPages || book.totalPages) - 1}
               className={`p-1.5 border cursor-pointer shrink-0 transition-colors ${borderThemeClasses[readerTheme]} text-[#8D8D8D] hover:text-white disabled:opacity-30 disabled:hover:text-[#8D8D8D]`}
             >
               <ChevronRight className="w-4 h-4" />
