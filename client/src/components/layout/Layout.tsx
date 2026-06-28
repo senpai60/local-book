@@ -8,22 +8,28 @@ import { useReaderStore } from '../../store/readerStore';
 import { useLibraryStore } from '../../store/libraryStore';
 
 export const Layout: React.FC = () => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, isCheckingAuth } = useAuthStore();
   const { activeBookId } = useReaderStore();
   const fetchLibrary = useLibraryStore((state) => state.fetchLibrary);
   const navigate = useNavigate();
 
   // Route guarding: check if authenticated
   useEffect(() => {
+    if (isCheckingAuth) return;
+    
     if (!isAuthenticated) {
       navigate('/auth/login');
     } else {
       fetchLibrary();
     }
-  }, [isAuthenticated, navigate, fetchLibrary]);
+  }, [isAuthenticated, isCheckingAuth, navigate, fetchLibrary]);
+
+  if (isCheckingAuth) {
+    return <div className="h-screen w-screen bg-[#090909] flex items-center justify-center text-[#8D8D8D] text-xs tracking-widest font-mono">LOADING VAULT...</div>;
+  }
 
   if (!isAuthenticated) {
-    return null; // Prevents flashing content
+    return null; // Prevents flashing content before redirect
   }
 
   // If a book is open in reader, let the reader render fullscreen.

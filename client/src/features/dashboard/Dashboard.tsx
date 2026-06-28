@@ -114,7 +114,7 @@ export const Dashboard: React.FC = () => {
                         {book.category}
                       </span>
                       <span className="text-[9px] text-[#8D8D8D] font-mono">
-                        {book.format.toUpperCase()}
+                        {book.format?.toUpperCase() || 'PDF'}
                       </span>
                     </div>
                     <h3 className="font-serif text-sm text-white mt-4 italic truncate group-hover:text-white transition-colors">

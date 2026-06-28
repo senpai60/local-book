@@ -2,3 +2,6 @@ server/node_modules
 server/.env
 client/node_modules
 client/.env
+server/error.log
+server/info.log
+server/storage/

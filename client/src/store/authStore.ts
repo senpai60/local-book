@@ -6,6 +6,7 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isCheckingAuth: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<boolean>;
   register: (name: string, email: string, password: string) => Promise<boolean>;
@@ -20,6 +21,7 @@ export const useAuthStore = create<AuthState>((set) => {
     user: null,
     isAuthenticated: false,
     isLoading: false,
+    isCheckingAuth: true,
     error: null,
 
     login: async (email, password) => {
@@ -66,13 +68,12 @@ export const useAuthStore = create<AuthState>((set) => {
     },
 
     checkAuth: async () => {
-      set({ isLoading: true });
       try {
         const response = await apiClient.get('/auth/profile');
         const user = response.data.data;
-        set({ user, isAuthenticated: true, isLoading: false });
+        set({ user, isAuthenticated: true, isCheckingAuth: false });
       } catch (error) {
-        set({ user: null, isAuthenticated: false, isLoading: false });
+        set({ user: null, isAuthenticated: false, isCheckingAuth: false });
       }
     },
 
