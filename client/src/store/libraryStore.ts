@@ -22,7 +22,7 @@ interface LibraryState {
   
   addBook: (book: Omit<Book, 'id' | 'uploadedAt' | 'progress' | 'currentPage'>) => void;
   removeBook: (bookId: string) => Promise<void>;
-  updateReadingProgress: (bookId: string, page: number) => Promise<void>;
+  updateReadingProgress: (bookId: string, page: number, totalPages?: number) => Promise<void>;
   
   addBookmark: (bookId: string, pageNumber: number, label: string, note?: string) => Promise<void>;
   removeBookmark: (bookmarkId: string) => Promise<void>;
@@ -54,26 +54,29 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         const libraryData = res.data.data?.docs || res.data.data || [];
         
         // Map backend UserBook structure to frontend Book structure
-        const formattedBooks = libraryData.map((item: any) => {
-          const book = item.bookId || {};
-          return {
-            id: book._id || item._id || `bk_${Math.random()}`,
-            title: book.title || 'Unknown Title',
-            author: book.author || 'Unknown Author',
-            coverUrl: book.coverUrl,
-            category: book.category || 'Uncategorized',
-            currentPage: item.currentPage || 0,
-            totalPages: book.totalPages || 1,
-            progress: item.progress || 0,
-            sizeBytes: book.sizeBytes || 0,
-            fileHash: book.fileHash || '',
-            uploadedAt: item.dateAdded || new Date().toISOString(),
-            description: book.description,
-            format: book.format || 'pdf',
-            lastReadAt: item.lastOpened || new Date().toISOString(),
-            tags: book.tags || [],
-          };
-        });
+        // Also filter out any ghost entries where the actual Book was deleted
+        const formattedBooks = libraryData
+          .filter((item: any) => item.bookId && item.bookId._id)
+          .map((item: any) => {
+            const book = item.bookId;
+            return {
+              id: book._id,
+              title: book.title || 'Unknown Title',
+              author: book.author || 'Unknown Author',
+              coverUrl: book.coverUrl,
+              category: book.category || 'Uncategorized',
+              currentPage: item.currentPage || 0,
+              totalPages: book.pages || book.totalPages || 1,
+              progress: item.progress || 0,
+              sizeBytes: book.sizeBytes || 0,
+              fileHash: book.fileHash || '',
+              uploadedAt: item.dateAdded || new Date().toISOString(),
+              description: book.description,
+              format: book.format || 'pdf',
+              lastReadAt: item.lastOpened || new Date().toISOString(),
+              tags: book.tags || [],
+            };
+          });
 
         set({ books: formattedBooks });
       } catch (error) {
@@ -121,16 +124,23 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       }
     },
 
-    updateReadingProgress: async (bookId, page) => {
+    updateReadingProgress: async (bookId, page, totalPages) => {
       try {
-        // Assuming backend accepts reading progress update
-        await apiClient.post('/progress', { bookId, currentPage: page });
+        // Correct API structure: PUT /progress/:bookId
+        await apiClient.put(`/progress/${bookId}`, { currentPage: page, totalPages });
         set((state) => ({
           books: state.books.map((book) => {
             if (book.id === bookId) {
-              const safePage = Math.min(book.totalPages || 1, Math.max(0, page));
-              const progress = Math.round((safePage / (book.totalPages || 1)) * 100);
-              return { ...book, currentPage: safePage, progress, lastReadAt: new Date().toISOString() };
+              const finalTotalPages = totalPages || book.totalPages || 1;
+              const safePage = Math.min(finalTotalPages - 1, Math.max(0, page));
+              const progress = Math.round(((safePage + 1) / finalTotalPages) * 100);
+              return { 
+                ...book, 
+                currentPage: safePage, 
+                totalPages: finalTotalPages,
+                progress, 
+                lastReadAt: new Date().toISOString() 
+              };
             }
             return book;
           })

@@ -56,6 +56,11 @@ export const Reader: React.FC = () => {
   const [noteContent, setNoteContent] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
 
+  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [pageItems, setPageItems] = useState<any[]>([]);
+  const [isDecrypting, setIsDecrypting] = useState<boolean>(false);
+  const [decryptionError, setDecryptionError] = useState<string | null>(null);
+
   // Fallback: if no active book, find the first available or redirect
   const book = books.find(b => b.id === activeBookId) || books[0];
 
@@ -66,31 +71,242 @@ export const Reader: React.FC = () => {
     }
   }, [book, navigate, addToast]);
 
-  if (!book) return null;
+  // Load PDF document using pdfjs in the background
+  useEffect(() => {
+    if (!book) return;
+    
+    let active = true;
+    setIsDecrypting(true);
+    setDecryptionError(null);
+    setPdfDoc(null);
+    setPageItems([]);
 
-  const chapters = MOCK_CHAPTERS[book.id] || [];
+    const loadPdf = async () => {
+      try {
+        const loadingTask = pdfjs.getDocument({
+          url: `/api/v1/books/${book.id}/file`,
+          withCredentials: true
+        });
+        const doc = await loadingTask.promise;
+        if (active) {
+          setPdfDoc(doc);
+          setNumPages(doc.numPages);
+          // Sync the total page count immediately to backend and store
+          updateReadingProgress(book.id, book.currentPage, doc.numPages);
+        }
+      } catch (err: any) {
+        console.error("Failed to load PDF document:", err);
+        if (active) {
+          setDecryptionError(err.message || "Failed to load PDF");
+        }
+      } finally {
+        if (active) {
+          setIsDecrypting(false);
+        }
+      }
+    };
 
-  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setNumPages(numPages);
-    // If book totalPages in state is wrong, we could dispatch to update it
-  };
+    loadPdf();
+    return () => {
+      active = false;
+    };
+  }, [book?.id, updateReadingProgress]);
+
+  // Load content (text & images) for the active page
+  useEffect(() => {
+    if (!pdfDoc || !book) return;
+
+    let active = true;
+    const loadPage = async () => {
+      try {
+        const page = await pdfDoc.getPage(book.currentPage + 1);
+        
+        // 1. Text extraction and sorting
+        const textContent = await page.getTextContent();
+        const items = textContent.items;
+        
+        const linesMap: { [key: number]: any[] } = {};
+        items.forEach((item: any) => {
+          if (!('str' in item) || !item.str.trim()) return;
+          const y = Math.round(item.transform[5]);
+          const foundY = Object.keys(linesMap).find(ly => Math.abs(Number(ly) - y) <= 3);
+          if (foundY) {
+            linesMap[Number(foundY)].push(item);
+          } else {
+            linesMap[y] = [item];
+          }
+        });
+
+        const sortedY = Object.keys(linesMap).map(Number).sort((a, b) => b - a);
+        const textLines = sortedY.map(y => {
+          const lineItems = linesMap[y].sort((a, b) => a.transform[4] - b.transform[4]);
+          const str = lineItems.map(item => item.str).join(' ');
+          return { type: 'text', y, str: str.replace(/\s+/g, ' ').trim() };
+        });
+
+        const paragraphs: any[] = [];
+        let currentParagraph = '';
+        let paragraphY = 0;
+
+        for (let i = 0; i < textLines.length; i++) {
+          const line = textLines[i];
+          if (currentParagraph === '') {
+            currentParagraph = line.str;
+            paragraphY = line.y;
+          } else {
+            const prevLine = textLines[i - 1];
+            const gap = prevLine.y - line.y;
+            // Check if Y distance between lines suggests paragraph break, or if line ended early
+            const isNewParagraph = gap > 18 || prevLine.str.length < 60;
+
+            if (isNewParagraph) {
+              paragraphs.push({
+                type: 'paragraph',
+                y: paragraphY,
+                content: currentParagraph
+              });
+              currentParagraph = line.str;
+              paragraphY = line.y;
+            } else {
+              if (currentParagraph.endsWith('-')) {
+                currentParagraph = currentParagraph.slice(0, -1) + line.str;
+              } else {
+                currentParagraph += ' ' + line.str;
+              }
+            }
+          }
+        }
+
+        if (currentParagraph !== '') {
+          paragraphs.push({
+            type: 'paragraph',
+            y: paragraphY,
+            content: currentParagraph
+          });
+        }
+
+        // 2. Image extraction
+        const images: any[] = [];
+        try {
+          const opList = await page.getOperatorList();
+          const OPS = pdfjs.OPS || {
+            transform: 12,
+            paintImageXObject: 85,
+            paintInlineImageXObject: 82
+          };
+          
+          let currentTransform = [1, 0, 0, 1, 0, 0];
+          
+          for (let i = 0; i < opList.fnArray.length; i++) {
+            const fn = opList.fnArray[i];
+            const args = opList.argsArray[i];
+            
+            if (fn === OPS.transform) {
+              currentTransform = args;
+            } else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject) {
+              const y = Math.round(currentTransform[5]);
+              let imgData: any = null;
+              
+              if (fn === OPS.paintImageXObject) {
+                const imgKey = args[0];
+                try {
+                  imgData = await new Promise((resolve, reject) => {
+                    page.objs.get(imgKey, (obj: any) => {
+                      if (obj) resolve(obj);
+                      else reject("Failed to get image object");
+                    });
+                  });
+                } catch (e) {
+                  console.warn("Could not get image object from page", e);
+                }
+              } else {
+                imgData = args[1];
+              }
+
+              if (imgData) {
+                const canvas = document.createElement('canvas');
+                canvas.width = imgData.width || imgData.naturalWidth || 100;
+                canvas.height = imgData.height || imgData.naturalHeight || 100;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  if (imgData instanceof ImageBitmap || imgData instanceof HTMLImageElement || imgData instanceof HTMLCanvasElement) {
+                    ctx.drawImage(imgData, 0, 0);
+                    const src = canvas.toDataURL();
+                    images.push({ type: 'image', y, src });
+                  } else if (imgData.data) {
+                    const imgDataObj = ctx.createImageData(canvas.width, canvas.height);
+                    if (imgData.data.length === canvas.width * canvas.height * 4) {
+                      imgDataObj.data.set(imgData.data);
+                    } else {
+                      let srcIdx = 0;
+                      let dstIdx = 0;
+                      for (let p = 0; p < canvas.width * canvas.height; p++) {
+                        imgDataObj.data[dstIdx] = imgData.data[srcIdx];
+                        imgDataObj.data[dstIdx + 1] = imgData.data[srcIdx + 1];
+                        imgDataObj.data[dstIdx + 2] = imgData.data[srcIdx + 2];
+                        imgDataObj.data[dstIdx + 3] = 255;
+                        srcIdx += 3;
+                        dstIdx += 4;
+                      }
+                    }
+                    ctx.putImageData(imgDataObj, 0, 0);
+                    const src = canvas.toDataURL();
+                    images.push({ type: 'image', y, src });
+                  }
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Failed to parse operator list for images", err);
+        }
+
+        // 3. Sort combination by Y descending
+        const combined = [...paragraphs, ...images].sort((a, b) => b.y - a.y);
+        if (active) {
+          setPageItems(combined);
+        }
+      } catch (err) {
+        console.error("Failed to extract page content:", err);
+      }
+    };
+
+    loadPage();
+    return () => {
+      active = false;
+    };
+  }, [pdfDoc, book?.currentPage]);
+
+  // Listen to fullscreen changes outside trigger (e.g. Esc button press)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [setIsFullscreen]);
+
+  const chapters = book ? (MOCK_CHAPTERS[book.id] || []) : [];
 
   const handlePrevPage = () => {
-    if (book.currentPage > 0) {
-      updateReadingProgress(book.id, book.currentPage - 1);
+    if (book && book.currentPage > 0) {
+      updateReadingProgress(book.id, book.currentPage - 1, numPages || book.totalPages);
     }
   };
 
   const handleNextPage = () => {
+    if (!book) return;
     const total = numPages || book.totalPages || 1;
     if (book.currentPage < total - 1) {
-      updateReadingProgress(book.id, book.currentPage + 1);
+      updateReadingProgress(book.id, book.currentPage + 1, total);
     }
   };
 
   const handlePageSelect = (page: number) => {
-    const safePage = Math.min(book.totalPages - 1, Math.max(0, page));
-    updateReadingProgress(book.id, safePage);
+    if (!book) return;
+    const total = numPages || book.totalPages || 1;
+    const safePage = Math.min(total - 1, Math.max(0, page));
+    updateReadingProgress(book.id, safePage, total);
   };
 
   // Keyboard page turn triggers
@@ -101,7 +317,9 @@ export const Reader: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [book.currentPage]);
+  }, [book?.currentPage, numPages]);
+
+  if (!book) return null;
 
   // Fullscreen trigger
   const handleToggleFullscreen = () => {
@@ -117,15 +335,6 @@ export const Reader: React.FC = () => {
       });
     }
   };
-
-  // Listen to fullscreen changes outside trigger (e.g. Esc button press)
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
 
   const handleCreateBookmark = (e: React.FormEvent) => {
     e.preventDefault();
@@ -537,7 +746,7 @@ export const Reader: React.FC = () => {
         {/* Centered Document Canvas Area */}
         <div className="flex-grow overflow-y-auto px-6 py-12 flex justify-center items-start">
           
-          <div className={`w-full flex flex-col h-full justify-between items-center ${marginClasses[marginWidth]}`}>
+          <div className={`w-full flex flex-col min-h-full justify-between items-center ${marginClasses[marginWidth]}`}>
             
             {/* Top Chapter Breadcrumb indicator */}
             <div className="flex items-center gap-1.5 select-none mb-6">
@@ -549,32 +758,57 @@ export const Reader: React.FC = () => {
                 {chapters.find(c => book.currentPage >= c.page)?.title || 'Preface'}
               </span>
             </div>
-
+ 
             {/* Immersive animated text display */}
-            <div className="flex-grow w-full flex flex-col justify-center items-center select-text relative overflow-hidden">
-              <Document
-                file={{ url: `/api/v1/books/${book.id}/file`, withCredentials: true }}
-                onLoadSuccess={onDocumentLoadSuccess}
-                loading={
-                  <div className="flex items-center justify-center text-[#8D8D8D] font-mono text-xs uppercase tracking-widest h-64">
-                    Decrypting Vault Source...
-                  </div>
-                }
-                error={
-                  <div className="text-red-500 font-mono text-xs p-4">
-                    Failed to decrypt physical format.
-                  </div>
-                }
-                className="flex justify-center"
-              >
-                <Page
-                  pageNumber={book.currentPage + 1}
-                  renderTextLayer={true}
-                  renderAnnotationLayer={true}
-                  width={marginWidth === 'compact' ? 400 : marginWidth === 'wide' ? 800 : 600}
-                  className="shadow-2xl bg-white"
-                />
-              </Document>
+            <div className="w-full flex flex-col justify-center select-text relative">
+              {isDecrypting ? (
+                <div className="flex items-center justify-center text-[#8D8D8D] font-mono text-xs uppercase tracking-widest h-64">
+                  Decrypting Vault Source...
+                </div>
+              ) : decryptionError ? (
+                <div className="text-red-500 font-mono text-xs p-4 text-center">
+                  Failed to decrypt physical format: {decryptionError}
+                </div>
+              ) : (
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={book.currentPage}
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    transition={{ duration: 0.22 }}
+                    className={`w-full select-text ${fontClasses[fontFamily]} ${sizeClasses[fontSize]}`}
+                    style={{
+                      lineHeight: lineHeight === 'tight' ? 1.6 : lineHeight === 'normal' ? 2.1 : 2.5
+                    }}
+                  >
+                    {pageItems.length > 0 ? (
+                      pageItems.map((item, idx) => {
+                        if (item.type === 'paragraph') {
+                          return (
+                            <p key={idx} className="mb-6 text-justify tracking-wide first-of-type:indent-0 indent-6">
+                              {item.content}
+                            </p>
+                          );
+                        } else if (item.type === 'image') {
+                          return (
+                            <div key={idx} className="my-8 flex justify-center max-w-full overflow-hidden">
+                              <img 
+                                src={item.src} 
+                                alt="Illustration" 
+                                className="max-w-full rounded border border-[#1f1f1f]/20 shadow-lg max-h-[450px] object-contain select-none" 
+                              />
+                            </div>
+                          );
+                        }
+                        return null;
+                      })
+                    ) : (
+                      <p className="italic text-[#8D8D8D] text-center">Empty page or no extractable content.</p>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              )}
             </div>
 
             {/* Embedded Bookmark shortcut list on page */}
