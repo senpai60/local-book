@@ -51,10 +51,31 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     fetchLibrary: async () => {
       try {
         const res = await apiClient.get('/library');
-        // Assuming backend returns an array of UserBook objects populated with book data
-        // We'll map it to our frontend Book type if needed. For now, assuming exact match.
         const libraryData = res.data.data?.docs || res.data.data || [];
-        set({ books: libraryData });
+        
+        // Map backend UserBook structure to frontend Book structure
+        const formattedBooks = libraryData.map((item: any) => {
+          const book = item.bookId || {};
+          return {
+            id: book._id || item._id || `bk_${Math.random()}`,
+            title: book.title || 'Unknown Title',
+            author: book.author || 'Unknown Author',
+            coverUrl: book.coverUrl,
+            category: book.category || 'Uncategorized',
+            currentPage: item.currentPage || 0,
+            totalPages: book.totalPages || 1,
+            progress: item.progress || 0,
+            sizeBytes: book.sizeBytes || 0,
+            fileHash: book.fileHash || '',
+            uploadedAt: item.dateAdded || new Date().toISOString(),
+            description: book.description,
+            format: book.format || 'pdf',
+            lastReadAt: item.lastOpened || new Date().toISOString(),
+            tags: book.tags || [],
+          };
+        });
+
+        set({ books: formattedBooks });
       } catch (error) {
         console.error('Failed to fetch library:', error);
       }
